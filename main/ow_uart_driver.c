@@ -12,6 +12,15 @@
 #include <esp_log.h>
 #include <soc/uart_struct.h>
 #include "ow_uart_driver.h"
+#include "soc/uart_periph.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
+#include "freertos/ringbuf.h"
+#include "esp_private/critical_section.h"
+#include <sdkconfig.h>
+#include "driver/gpio.h"
+
+#define UART_INTR_MASK (UART_INTR_TX_DONE | UART_INTR_RXFIFO_FULL)
 
 #include "soc/uart_periph.h"
 
@@ -36,19 +45,35 @@ static void IRAM_ATTR uart_intr_handle() {
             _len -= 1;
         }
     }
-    uart_clear_intr_status(OW_UART_NUM, UART_INTR_MASK);
+    uart_clear_intr_status(OW_UART_NUM, UART_LL_INTR_MASK);
 }
 
 esp_err_t ow_uart_driver_init() {
+    esp_err_t r;
     uart_config_t uart_config = OW_UART_CONFIG(ow_uart.last_baud_rate);
     ESP_ERROR_CHECK(uart_param_config(OW_UART_NUM, &uart_config));
     ESP_ERROR_CHECK(uart_set_pin(OW_UART_NUM, OW_UART_TXD, OW_UART_RXD, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
-    uart_ll_ena_intr_mask(ow_uart.dev, UART_INTR_TX_DONE | UART_INTR_RXFIFO_FULL);
-    uart_enable_rx_intr(OW_UART_NUM);
+    // rx pin should be floating in order to correctly receive data from sensor
+    gpio_set_pull_mode(OW_UART_RXD, GPIO_FLOATING);
 
-    ESP_ERROR_CHECK(
-        esp_intr_alloc(uart_periph_signal[OW_UART_NUM].irq, ESP_INTR_FLAG_LOWMED | ESP_INTR_FLAG_IRAM, uart_intr_handle,
-            NULL, ow_uart.handle_ow_uart));
+    uart_intr_config_t uart_intr = {
+        .intr_enable_mask = UART_INTR_MASK,
+        .rxfifo_full_thresh = 1,
+    };
+
+    uart_ll_disable_intr_mask(ow_uart.dev, UART_LL_INTR_MASK);
+    uart_ll_clr_intsts_mask(ow_uart.dev, UART_LL_INTR_MASK);
+
+    r = esp_intr_alloc(uart_periph_signal[OW_UART_NUM].irq, ESP_INTR_FLAG_LOWMED | ESP_INTR_FLAG_IRAM,
+                       uart_intr_handle, NULL,
+                       ow_uart.handle_ow_uart);
+    if (r != ESP_OK) {
+        ESP_LOGE("owbus", "init failed on intr alloc %d", r);
+    }
+    r = uart_intr_config(OW_UART_NUM, &uart_intr);
+    if (r != ESP_OK) {
+        ESP_LOGE("owbus", "init failed on intr config");
+    }
 
     ow_uart.rx_fifo_addr = (ow_uart.dev == &UART0)
                                ? UART_FIFO_REG(0)
@@ -60,7 +85,6 @@ esp_err_t ow_uart_driver_init() {
                                : (ow_uart.dev == &UART1)
                                      ? UART_FIFO_AHB_REG(1)
                                      : UART_FIFO_AHB_REG(2);
-    ow_uart.dev->conf1.rxfifo_full_thrhd = 1;
     return ESP_OK;
 }
 

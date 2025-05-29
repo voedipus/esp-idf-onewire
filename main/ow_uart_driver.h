@@ -16,9 +16,9 @@
 #include "hal/uart_hal.h"
 #include "soc/gpio_num.h"
 
-#define OW_UART_NUM     UART_NUM_1
-#define OW_UART_TXD     GPIO_NUM_16
-#define OW_UART_RXD     GPIO_NUM_17
+#define OW_UART_NUM     UART_NUM_0
+#define OW_UART_TXD     GPIO_NUM_43
+#define OW_UART_RXD     GPIO_NUM_44
 
 #define ONEWIRE_RESET 0xF0
 
